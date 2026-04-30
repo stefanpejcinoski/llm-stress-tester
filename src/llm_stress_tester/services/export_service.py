@@ -30,9 +30,9 @@ def export_xlsx(summary: RunSummary) -> bytes:
     buf = BytesIO()
     with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
         _write_config_sheet(summary, writer)
-        _write_raw_sheet(summary, writer)
         _write_stage_sheet(summary, writer)
         _write_model_sheet(summary, writer)
+        _write_raw_sheet(summary, writer)
         _write_errors_sheet(summary, writer)
     buf.seek(0)
     return buf.read()
@@ -195,23 +195,26 @@ def _write_config_sheet(
 def _write_raw_sheet(
     summary: RunSummary, writer: pd.ExcelWriter,
 ) -> None:
-    """Write raw request metrics sheet."""
+    """Write raw request metrics sheet.
+
+    Columns match the UI raw metrics table exactly. All rows are written
+    (no display cap). Summary sheets appear before this sheet in the workbook.
+    """
     unit = summary.config.rate_unit if summary.config else RateUnit.RPS
     sfx = column_suffix(unit)
     data = [
         {
-            "stage_index": m.stage_index,
+            "stage": m.stage_index,
             "model": m.model,
-            "model_percentage": m.model_percentage,
-            "token_index": m.token_index,
+            "token_idx": m.token_index,
             "token_label": m.token_label,
             "active_users": m.active_users,
-            f"target_{sfx}": round(to_display(m.target_rps, unit)[0], 4),
-            f"aggregate_{sfx}": round(to_display(m.aggregate_rps, unit)[0], 4),
+            f"target_{sfx}": round(to_display(m.target_rps, unit)[0], 2),
+            f"aggregate_{sfx}": round(to_display(m.aggregate_rps, unit)[0], 2),
             "status": m.status,
             "status_code": m.status_code,
-            "latency_ms": m.latency_ms,
-            "error_type": m.error_type,
+            "latency_ms": round(m.latency_ms, 2),
+            "error_type": m.error_type or "",
             "suite_id": m.suite_id,
             "prompt_id": m.prompt_id,
         }
