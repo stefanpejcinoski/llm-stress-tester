@@ -40,4 +40,20 @@ def format_rate_conversion(slider_val: int, unit: RateUnit) -> str:
     return f"{slider_val} RPS = {slider_val:.2f} RPS"
 
 
+def to_display(rps: float, unit: RateUnit) -> tuple[float, str]:
+    """Convert a canonical RPS value to display value and unit label.
+
+    Returns (display_value, label) where label is 'RPM' or 'RPS'.
+    Use this at every display site so internal storage stays in RPS.
+    """
+    if unit == RateUnit.RPM:
+        return rps * 60.0, "RPM"
+    return rps, "RPS"
+
+
+def column_suffix(unit: RateUnit) -> str:
+    """Return column name suffix matching selected unit: 'rpm' or 'rps'."""
+    return "rpm" if unit == RateUnit.RPM else "rps"
+
+
 VALID_SLIDER_RANGE: tuple[int, int] = (MIN_RATE_SLIDER_VALUE, MAX_RATE_SLIDER_VALUE)

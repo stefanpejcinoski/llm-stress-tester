@@ -10,6 +10,7 @@ from llm_stress_tester.constants import MIN_RATE_SLIDER_VALUE as MIN_RATE_SLIDER
 from llm_stress_tester.data.prompts import SUITES_DESCRIPTIONS
 from llm_stress_tester.enums import RateUnit
 from llm_stress_tester.schemas import ModelEntry, TokenEntry
+from llm_stress_tester.utils.rate_units import slider_to_internal_rate
 
 
 def render_endpoint_form():
@@ -141,10 +142,15 @@ def render_rate_form():
         key="time_increment",
     )
 
+    # Always return canonical RPS regardless of display unit.
+    # load_runner, schedule, and metrics all operate in RPS internally.
+    initial_rate_rps = slider_to_internal_rate(int(initial_rate), rate_unit_enum)
+    max_rate_rps = slider_to_internal_rate(int(max_rate), rate_unit_enum)
+
     return (
         rate_unit_enum,
-        float(initial_rate),
-        float(max_rate),
+        initial_rate_rps,
+        max_rate_rps,
         float(scaling_factor),
         float(time_increment),
     )

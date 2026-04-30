@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from llm_stress_tester.enums import RateUnit
 from llm_stress_tester.schemas import ModelEntry
 
 
@@ -58,14 +59,20 @@ def validate_rate_schedule(
     max_rate: float,
     scaling_factor: float,
     increment: float,
+    unit: RateUnit = RateUnit.RPS,
 ) -> list[str]:
-    """Validate rate schedule parameters."""
+    """Validate rate schedule parameters.
+
+    ``initial`` and ``max_rate`` are always in canonical RPS regardless of
+    ``unit``. ``unit`` is only used to produce human-readable error labels.
+    """
+    label = unit.value.upper()  # "RPS" or "RPM"
     errors: list[str] = []
 
     if initial <= 0:
-        errors.append("Initial RPS must be > 0")
+        errors.append(f"Initial {label} must be > 0")
     if max_rate < initial:
-        errors.append("Max RPS must be >= Initial RPS")
+        errors.append(f"Max {label} must be >= Initial {label}")
     if scaling_factor <= 1.0:
         errors.append("Scaling factor must be > 1.0")
     if increment <= 0:

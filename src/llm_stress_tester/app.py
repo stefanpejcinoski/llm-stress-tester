@@ -10,7 +10,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 import streamlit as st
 
 from llm_stress_tester.data.prompts import SUITES_DESCRIPTIONS
-from llm_stress_tester.enums import BenchmarkSuite
+from llm_stress_tester.enums import BenchmarkSuite, RateUnit
 from llm_stress_tester.schemas import ProgressInfo, RunSummary, TestConfig
 from llm_stress_tester.services.export_service import export_pdf, export_xlsx
 from llm_stress_tester.services.load_runner import run_test
@@ -25,6 +25,7 @@ from llm_stress_tester.ui.forms import (
     render_tokens_form,
     render_users_form,
 )
+from llm_stress_tester.utils.rate_units import to_display
 from llm_stress_tester.utils.validation import (
     validate_models,
     validate_rate_schedule,
@@ -92,6 +93,7 @@ def _render_progress(
     running_flag_name: str,
     future_flag_name: str,
     summary_flag_name: str,
+    rate_unit: object = None,
 ) -> None:
     """Render live progress inside an auto-refreshing fragment."""
 
@@ -138,13 +140,17 @@ def _render_progress(
                      f"{live.stage_elapsed_s:.0f}s / {live.stage_duration_s:.0f}s",
             )
 
+            _unit = rate_unit if isinstance(rate_unit, RateUnit) else RateUnit.RPS
+            target_disp, rate_label = to_display(live.target_rps, _unit)
+            achieved_disp, _ = to_display(live.achieved_rps, _unit)
+
             cols = st.columns(5)
-            cols[0].metric("Target RPS", f"{live.target_rps:.2f}")
-            rps_delta = live.achieved_rps - live.target_rps
+            cols[0].metric(f"Target {rate_label}", f"{target_disp:.2f}")
+            rate_delta = achieved_disp - target_disp
             cols[1].metric(
-                "Achieved RPS",
-                f"{live.achieved_rps:.2f}",
-                delta=f"{rps_delta:+.2f} vs target",
+                f"Achieved {rate_label}",
+                f"{achieved_disp:.2f}",
+                delta=f"{rate_delta:+.2f} vs target",
                 delta_color="off",
             )
             cols[2].metric("Active Users", live.active_users)
@@ -234,7 +240,7 @@ def main():
     errors.extend(validate_models(models))
     errors.extend(
         validate_rate_schedule(
-            initial_rate, max_rate, scaling_factor, time_increment,
+            initial_rate, max_rate, scaling_factor, time_increment, rate_unit,
         ),
     )
     errors.extend(
@@ -329,6 +335,7 @@ def main():
             "running",
             "future",
             "summary",
+            rate_unit=rate_unit,
         )
         return  # Halt main flow while running — fragment handles rendering
 
@@ -347,10 +354,11 @@ def main():
         st.rerun()
 
     elif len(stages) > 0:
+        max_disp, rate_label = to_display(max_rate, rate_unit)
         st.success(
             "Ready to test! "
             f"{total_stages} stages in schedule. "
-            f"Reach max RPS -- {max_rate:.1f} "
+            f"Reach max {rate_label} -- {max_disp:.2f} "
             f"-- and max users -- {max_users}.",
         )
 

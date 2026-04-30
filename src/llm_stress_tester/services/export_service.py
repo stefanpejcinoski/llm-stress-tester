@@ -11,11 +11,13 @@ from matplotlib.ticker import FuncFormatter
 
 matplotlib.use("Agg")
 
+from llm_stress_tester.enums import RateUnit
 from llm_stress_tester.schemas import RequestMetric, RunSummary
+from llm_stress_tester.utils.rate_units import column_suffix, to_display
 
 
-def _rps_fmt(val: float, _pos: int) -> str:
-    """Adaptive RPS tick: 2 decimals <10, 1 decimal <100, integers above."""
+def _rate_fmt(val: float, _pos: int) -> str:
+    """Adaptive rate tick: 2 decimals <10, 1 decimal <100, integers above."""
     if val >= 100:
         return f"{val:.0f}"
     if val >= 10:
@@ -44,30 +46,32 @@ def export_pdf(summary: RunSummary) -> bytes:
     stage_metrics = summary.stage_metrics
     base_url = [s.elapsed_seconds for s in stage_metrics]
 
-    ax0 = axes[0, 0]
-    target_rps_vals = [s.target_rps for s in stage_metrics]
-    achieved_rps_vals = [s.achieved_rps for s in stage_metrics]
+    unit = summary.config.rate_unit if summary.config else RateUnit.RPS
+    _, rate_label = to_display(1.0, unit)  # "RPS" or "RPM"
+    target_disp = [to_display(s.target_rps, unit)[0] for s in stage_metrics]
+    achieved_disp = [to_display(s.achieved_rps, unit)[0] for s in stage_metrics]
 
-    # Left axis: Target RPS
+    ax0 = axes[0, 0]
+    # Left axis: Target rate
     (line_t,) = ax0.plot(
-        base_url, target_rps_vals, marker="o", color="steelblue", label="Target RPS",
+        base_url, target_disp, marker="o", color="steelblue", label=f"Target {rate_label}",
     )
     ax0.set_xlabel("Time (s)")
-    ax0.set_ylabel("Target RPS", color="steelblue")
+    ax0.set_ylabel(f"Target {rate_label}", color="steelblue")
     ax0.tick_params(axis="y", labelcolor="steelblue")
-    ax0.yaxis.set_major_formatter(FuncFormatter(_rps_fmt))
+    ax0.yaxis.set_major_formatter(FuncFormatter(_rate_fmt))
     ax0.grid(True, alpha=0.4)
 
-    # Right axis: Achieved RPS — independently scaled so it is never a flat line
+    # Right axis: Achieved rate — independently scaled, never a flat line
     ax0b = ax0.twinx()
     (line_a,) = ax0b.plot(
-        base_url, achieved_rps_vals, marker="s", color="crimson", label="Achieved RPS",
+        base_url, achieved_disp, marker="s", color="crimson", label=f"Achieved {rate_label}",
     )
-    ax0b.set_ylabel("Achieved RPS", color="crimson")
+    ax0b.set_ylabel(f"Achieved {rate_label}", color="crimson")
     ax0b.tick_params(axis="y", labelcolor="crimson")
-    ax0b.yaxis.set_major_formatter(FuncFormatter(_rps_fmt))
+    ax0b.yaxis.set_major_formatter(FuncFormatter(_rate_fmt))
 
-    ax0.set_title("Aggregate RPS Over Time")
+    ax0.set_title(f"Aggregate {rate_label} Over Time")
     ax0.legend(handles=[line_t, line_a], loc="upper left")
 
     ax1 = axes[0, 1]
@@ -192,6 +196,8 @@ def _write_raw_sheet(
     summary: RunSummary, writer: pd.ExcelWriter,
 ) -> None:
     """Write raw request metrics sheet."""
+    unit = summary.config.rate_unit if summary.config else RateUnit.RPS
+    sfx = column_suffix(unit)
     data = [
         {
             "stage_index": m.stage_index,
@@ -200,8 +206,8 @@ def _write_raw_sheet(
             "token_index": m.token_index,
             "token_label": m.token_label,
             "active_users": m.active_users,
-            "target_rps": m.target_rps,
-            "aggregate_rps": m.aggregate_rps,
+            f"target_{sfx}": round(to_display(m.target_rps, unit)[0], 4),
+            f"aggregate_{sfx}": round(to_display(m.aggregate_rps, unit)[0], 4),
             "status": m.status,
             "status_code": m.status_code,
             "latency_ms": m.latency_ms,
@@ -221,12 +227,14 @@ def _write_stage_sheet(
     summary: RunSummary, writer: pd.ExcelWriter,
 ) -> None:
     """Write per-stage aggregated metrics sheet."""
+    unit = summary.config.rate_unit if summary.config else RateUnit.RPS
+    sfx = column_suffix(unit)
     data = [
         {
             "stage_index": s.stage_index,
             "elapsed_seconds": s.elapsed_seconds,
-            "target_rps": s.target_rps,
-            "achieved_rps": s.achieved_rps,
+            f"target_{sfx}": round(to_display(s.target_rps, unit)[0], 4),
+            f"achieved_{sfx}": round(to_display(s.achieved_rps, unit)[0], 4),
             "active_users": s.active_users,
             "total_requests": s.total_requests,
             "successful": s.successful,
@@ -241,7 +249,13 @@ def _write_stage_sheet(
     ]
     if not data:
         data = [
-            {**dict.fromkeys(["stage_index", "elapsed_seconds", "target_rps", "achieved_rps", "active_users", "total_requests", "successful", "failed", "avg_latency_ms", "p50_latency_ms", "p95_latency_ms", "p99_latency_ms", "error_rate"], "")},
+            {**dict.fromkeys(
+                ["stage_index", "elapsed_seconds", f"target_{sfx}", f"achieved_{sfx}",
+                 "active_users", "total_requests", "successful", "failed",
+                 "avg_latency_ms", "p50_latency_ms", "p95_latency_ms", "p99_latency_ms",
+                 "error_rate"],
+                "",
+            )},
         ]
     pd.DataFrame(data).to_excel(
         writer, sheet_name="stage_summary", index=False,
