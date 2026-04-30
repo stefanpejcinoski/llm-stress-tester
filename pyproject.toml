@@ -1,0 +1,85 @@
+[project]
+name = "llm-stress-tester"
+version = "0.1.0"
+description = "Load tester for OpenAI-compatible LLM inference endpoints"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "streamlit>=1.45",
+    "httpx>=0.28",
+    "pydantic>=2.0",
+    "pandas>=2.2",
+    "xlsxwriter>=3.2",
+    "matplotlib>=3.10",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "pytest-httpx>=0.35",
+    "ruff>=0.9",
+    "pyright>=1.1",
+]
+
+[tool.ruff]
+target-version = "py314"
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    "ANN001",   # missing type annotation for function argument
+    "ANN101",   # missing type annotation for self
+    "ANN102",   # missing type annotation for cls
+    "ANN201",   # missing return type annotation for Streamlit helper functions
+    "ANN202",   # missing return type annotation for private functions
+    "ARG001",   # unused function argument
+    "ASYNC109", # async function with timeout parameter
+    "BLE001",   # blind except Exception (deliberate in load testing)
+    "C901",     # function too complex (Streamlit entry point)
+    "C901",     # function too complex
+    "D100",     # missing docstring in public module
+    "D104",     # missing docstring in public package
+    "D107",     # missing docstring in __init__
+    "D401",     # docstring imperative mood
+    "DTZ005",   # datetime without tz
+    "E501",     # line too long (intentional for prompt strings)
+    "FBT001",   # boolean positional arg in function definition
+    "FBT002",   # boolean default value in function definition
+    "FBT003",   # boolean positional value in function call
+    "ICN001",   # matplotlib import alias
+    "NPY002",   # legacy numpy random
+    "PERF401",  # list extend vs loop
+    "PLC0415",  # import not at top level (some legitimate inline imports)
+    "PLR0912",  # too many branches
+    "PLR0913",  # too many arguments in functions
+    "PLR0915",  # too many statements
+    "PLR2004",  # magic value in comparison
+    "RET504",   # unnecessary assignment before return
+    "S101",     # assert statements
+    "S603",     # subprocess default safety
+    "S607",     # relative parent process
+    "SIM108",   # ternary operator
+    "TC001",    # type-checking imports (conflicts with __future__ annotations)
+    "TC002",    # type-checking third-party imports
+    "TC003",    # type-checking standard library imports
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = [
+    "PLR2004",  # magic value in comparison
+    "S101",     # assert statements
+    "ANN",      # annotations in tests
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["llm_stress_tester"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.pyright]
+typeCheckingMode = "strict"
+reportMissingImports = true
