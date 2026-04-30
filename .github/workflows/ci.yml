@@ -4,6 +4,8 @@ on:
   push:
     branches: [main, master]
   pull_request:
+  release:
+    types: [published]
 
 jobs:
   # ── Lint ────────────────────────────────────────────────────────────────────
@@ -45,22 +47,29 @@ jobs:
         run: python -m pytest --tb=short -q
 
   # ── Build executables ────────────────────────────────────────────────────────
-  # Only runs on push to main/master (not PRs) and only if lint + test pass.
-  # Produces one artifact per platform, available for 30 days on the Actions tab.
+  # Runs on push to main/master and on release published (not PRs).
+  # On release events the binary is also uploaded to the GitHub release.
   build:
     needs: [lint, test]
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' || github.event_name == 'release'
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest, ubuntu-latest]
+        include:
+          - os: windows-latest
+            src: dist/llm-stress-tester.exe
+            binary: llm-stress-tester-windows.exe
+          - os: macos-latest
+            src: dist/llm-stress-tester
+            binary: llm-stress-tester-macos
+          - os: ubuntu-latest
+            src: dist/llm-stress-tester
+            binary: llm-stress-tester-linux
     runs-on: ${{ matrix.os }}
 
     steps:
       - uses: actions/checkout@v4
 
-      # PyInstaller 6.x has stable support for Python 3.13.
-      # Lint/test stay on 3.13 above; keeping the same version here.
       - name: Set up Python 3.13
         uses: actions/setup-python@v5
         with:
@@ -92,9 +101,20 @@ jobs:
           --hidden-import llm_stress_tester
           launcher.py
 
+      - name: Rename binary
+        shell: bash
+        run: mv "${{ matrix.src }}" "dist/${{ matrix.binary }}"
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: llm-stress-tester-${{ matrix.os }}
-          path: dist/
+          path: dist/${{ matrix.binary }}
           retention-days: 30
+
+      - name: Upload to release
+        if: github.event_name == 'release'
+        uses: AButler/upload-release-assets@v3.0
+        with:
+          files: dist/${{ matrix.binary }}
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
