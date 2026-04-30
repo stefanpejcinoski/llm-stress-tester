@@ -70,6 +70,7 @@ class _ProgressHolder:
 def _run_test_in_thread(
     config: TestConfig,
     holder: _ProgressHolder,
+    cancel_event: threading.Event,
 ) -> RunSummary:
     """Run the async load test in this worker thread's event loop.
 
@@ -80,7 +81,7 @@ def _run_test_in_thread(
         holder.set(info)
 
     async def _runner() -> RunSummary:
-        return await run_test(config, on_progress=_on_progress)
+        return await run_test(config, on_progress=_on_progress, cancel_event=cancel_event)
 
     return asyncio.run(_runner())
 
@@ -94,6 +95,7 @@ def _render_progress(
     future_flag_name: str,
     summary_flag_name: str,
     rate_unit: object = None,
+    cancel_event_key: str = "cancel_event",
 ) -> None:
     """Render live progress inside an auto-refreshing fragment."""
 
@@ -173,8 +175,16 @@ def _render_progress(
                 f"{api_path.lstrip('/')}...",
             )
 
-        # When running, stop here so the rest of main() doesn't re-render
+        # Stop Test button — signals the background thread to exit early
+        # and returns whatever partial results have been collected so far.
         if running:
+            if st.button("Stop Test", type="secondary", key="stop_btn"):
+                evt: threading.Event | None = st.session_state.get(cancel_event_key)
+                if evt is not None:
+                    evt.set()
+                # Don't clear future — let it finish naturally and return
+                # partial RunSummary; the future.done() check above will
+                # pick it up on the next fragment refresh.
             st.stop()
 
     _fragment()
@@ -196,7 +206,7 @@ def main():
     )
 
     # ── Session state ────────────────────────────────────────────
-    for key in ("running", "future", "progress_holder", "summary", "stages"):
+    for key in ("running", "future", "progress_holder", "summary", "stages", "cancel_event"):
         if key not in st.session_state:
             setattr(st.session_state, key, None)
 
@@ -336,6 +346,7 @@ def main():
             "future",
             "summary",
             rate_unit=rate_unit,
+            cancel_event_key="cancel_event",
         )
         return  # Halt main flow while running — fragment handles rendering
 
@@ -343,13 +354,15 @@ def main():
     if st.button(
         "Start Load Test", type="primary", disabled=len(stages) == 0,
     ):
+        cancel_event = threading.Event()
         holder = _ProgressHolder()
         st.session_state.progress_holder = holder
+        st.session_state.cancel_event = cancel_event
         st.session_state.summary = None
         st.session_state.running = True
         st.session_state["_progress_tick"] = 0
         st.session_state.future = _EXECUTOR.submit(
-            _run_test_in_thread, config, holder,
+            _run_test_in_thread, config, holder, cancel_event,
         )
         st.rerun()
 

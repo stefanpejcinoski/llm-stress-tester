@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 
 from httpx import AsyncClient, Limits
 
@@ -29,6 +30,7 @@ from llm_stress_tester.services.traffic_allocator import (
 async def run_test(
     config: TestConfig,
     on_progress: callable | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> RunSummary:
     """Run the full load test according to config and schedule."""
     summary = RunSummary(config=config, status="running")
@@ -151,6 +153,10 @@ async def run_test(
                         else:
                             stage_failed += 1
 
+                    # Check for cancellation after each batch
+                    if cancel_event is not None and cancel_event.is_set():
+                        break
+
                     # Mid-stage progress emission after every gather batch
                     if on_progress:
                         stage_elapsed_s = loop.time() - stage_start
@@ -169,6 +175,9 @@ async def run_test(
                             stage_duration_s=stage.duration,
                         ))
 
+            # If cancelled mid-stage, still record what was collected then stop
+            cancelled = cancel_event is not None and cancel_event.is_set()
+
             # End-of-stage: compute and store stage metrics
             stage_metrics_this = [
                 m for m in summary.metrics if m.stage_index == stage.stage_index
@@ -184,7 +193,10 @@ async def run_test(
             summary.stage_metrics.append(stage_summary)
             cumulative_prev_s += stage.duration
 
-        summary.status = "completed"
+            if cancelled:
+                break
+
+        summary.status = "completed" if not (cancel_event is not None and cancel_event.is_set()) else "running"
     except asyncio.CancelledError:
         summary.status = "error"
         summary.error_message = "Test cancelled"
