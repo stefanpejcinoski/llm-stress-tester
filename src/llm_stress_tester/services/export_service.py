@@ -5,12 +5,22 @@ from __future__ import annotations
 from io import BytesIO
 
 import matplotlib
-
-matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import pandas as pd
+from matplotlib.ticker import FuncFormatter
+
+matplotlib.use("Agg")
 
 from llm_stress_tester.schemas import RequestMetric, RunSummary
+
+
+def _rps_fmt(val: float, _pos: int) -> str:
+    """Adaptive RPS tick: 2 decimals <10, 1 decimal <100, integers above."""
+    if val >= 100:
+        return f"{val:.0f}"
+    if val >= 10:
+        return f"{val:.1f}"
+    return f"{val:.2f}"
 
 
 def export_xlsx(summary: RunSummary) -> bytes:
@@ -35,12 +45,30 @@ def export_pdf(summary: RunSummary) -> bytes:
     base_url = [s.elapsed_seconds for s in stage_metrics]
 
     ax0 = axes[0, 0]
-    ax0.plot(base_url, [s.target_rps for s in stage_metrics], label="Target RPS")
-    ax0.plot(base_url, [s.achieved_rps for s in stage_metrics], label="Achieved RPS")
+    target_rps_vals = [s.target_rps for s in stage_metrics]
+    achieved_rps_vals = [s.achieved_rps for s in stage_metrics]
+
+    # Left axis: Target RPS
+    (line_t,) = ax0.plot(
+        base_url, target_rps_vals, marker="o", color="steelblue", label="Target RPS",
+    )
     ax0.set_xlabel("Time (s)")
-    ax0.set_ylabel("RPS")
-    ax0.legend()
+    ax0.set_ylabel("Target RPS", color="steelblue")
+    ax0.tick_params(axis="y", labelcolor="steelblue")
+    ax0.yaxis.set_major_formatter(FuncFormatter(_rps_fmt))
+    ax0.grid(True, alpha=0.4)
+
+    # Right axis: Achieved RPS — independently scaled so it is never a flat line
+    ax0b = ax0.twinx()
+    (line_a,) = ax0b.plot(
+        base_url, achieved_rps_vals, marker="s", color="crimson", label="Achieved RPS",
+    )
+    ax0b.set_ylabel("Achieved RPS", color="crimson")
+    ax0b.tick_params(axis="y", labelcolor="crimson")
+    ax0b.yaxis.set_major_formatter(FuncFormatter(_rps_fmt))
+
     ax0.set_title("Aggregate RPS Over Time")
+    ax0.legend(handles=[line_t, line_a], loc="upper left")
 
     ax1 = axes[0, 1]
     ax1.plot(base_url, [s.p50_latency_ms for s in stage_metrics], label="P50")

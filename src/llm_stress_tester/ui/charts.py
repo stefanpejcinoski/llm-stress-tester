@@ -11,10 +11,20 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import streamlit as st
+from matplotlib.ticker import FuncFormatter
 
 matplotlib.use("Agg")
 
 from llm_stress_tester.schemas import RunSummary
+
+
+def _rps_fmt(val: float, _pos: int) -> str:
+    """Adaptive RPS tick: 2 decimals <10, 1 decimal <100, integers above."""
+    if val >= 100:
+        return f"{val:.0f}"
+    if val >= 10:
+        return f"{val:.1f}"
+    return f"{val:.2f}"
 
 
 def render_charts(summary: RunSummary, num_rows: int) -> None:
@@ -36,15 +46,30 @@ def render_charts(summary: RunSummary, num_rows: int) -> None:
     elapsed = [s.elapsed_seconds for s in stage_metrics]
 
     ax00 = axes[0, 0]
-    target_rps = [s.target_rps for s in stage_metrics]
-    achieved_rps = [s.achieved_rps for s in stage_metrics]
-    ax00.plot(elapsed, target_rps, marker="o", label="Target RPS", color="blue")
-    ax00.plot(elapsed, achieved_rps, marker="s", label="Achieved RPS", color="red")
+    target_rps_vals = [s.target_rps for s in stage_metrics]
+    achieved_rps_vals = [s.achieved_rps for s in stage_metrics]
+
+    # Left axis: Target RPS
+    (line_t,) = ax00.plot(
+        elapsed, target_rps_vals, marker="o", color="steelblue", label="Target RPS",
+    )
     ax00.set_xlabel("Elapsed (s)")
-    ax00.set_ylabel("RPS")
+    ax00.set_ylabel("Target RPS", color="steelblue")
+    ax00.tick_params(axis="y", labelcolor="steelblue")
+    ax00.yaxis.set_major_formatter(FuncFormatter(_rps_fmt))
+    ax00.grid(True, alpha=0.4)
+
+    # Right axis: Achieved RPS — independently scaled so it is never a flat line
+    ax00b = ax00.twinx()
+    (line_a,) = ax00b.plot(
+        elapsed, achieved_rps_vals, marker="s", color="crimson", label="Achieved RPS",
+    )
+    ax00b.set_ylabel("Achieved RPS", color="crimson")
+    ax00b.tick_params(axis="y", labelcolor="crimson")
+    ax00b.yaxis.set_major_formatter(FuncFormatter(_rps_fmt))
+
     ax00.set_title("RPS Over Time (Target vs Achieved)")
-    ax00.legend()
-    ax00.grid(True)
+    ax00.legend(handles=[line_t, line_a], loc="upper left")
 
     # ── 2. Latency percentiles ─────────────────────────────────
     ax01 = axes[0, 1]
