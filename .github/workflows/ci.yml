@@ -92,6 +92,7 @@ jobs:
           pyinstaller
           --onefile
           --name llm-stress-tester
+          --add-data "src/llm_stress_tester/app.py:llm_stress_tester"
           --collect-data streamlit
           --collect-all streamlit
           --hidden-import streamlit
