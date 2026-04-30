@@ -86,7 +86,6 @@ class RequestMetric:
     token_label: str
     active_users: int
     target_rps: float
-    aggregate_rps: float
     status: RequestStatus
     status_code: int | None
     latency_ms: float

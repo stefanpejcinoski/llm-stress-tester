@@ -11,7 +11,6 @@ def compute_stage_metrics(
     elapsed_seconds: float,
     metrics: list[RequestMetric],
     target_rps: float,
-    aggregate_rps: float,
     active_users: int,
 ) -> StageMetric:
     """Compute aggregated stage metrics from raw request metrics."""

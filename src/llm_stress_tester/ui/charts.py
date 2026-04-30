@@ -185,6 +185,7 @@ def render_raw_metrics(summary: RunSummary, num_rows: int) -> None:
 
     unit = summary.config.rate_unit if summary.config else RateUnit.RPS
     sfx = column_suffix(unit)
+    achieved_by_stage = {s.stage_index: s.achieved_rps for s in (summary.stage_metrics or [])}
     data = [
         {
             "stage": m.stage_index,
@@ -193,7 +194,7 @@ def render_raw_metrics(summary: RunSummary, num_rows: int) -> None:
             "token_label": m.token_label,
             "active_users": m.active_users,
             f"target_{sfx}": round(to_display(m.target_rps, unit)[0], 2),
-            f"aggregate_{sfx}": round(to_display(m.aggregate_rps, unit)[0], 2),
+            f"achieved_{sfx}": round(to_display(achieved_by_stage.get(m.stage_index, 0.0), unit)[0], 2),
             "status": m.status,
             "status_code": m.status_code,
             "latency_ms": round(m.latency_ms, 2),

@@ -16,7 +16,6 @@ def test_compute_stage_metrics_empty():
         elapsed_seconds=1.0,
         metrics=[],
         target_rps=10.0,
-        aggregate_rps=20.0,
         active_users=2,
     )
     assert result.stage_index == 0
@@ -37,7 +36,6 @@ def test_compute_stage_metrics_success():
             token_label="user-a",
             active_users=1,
             target_rps=5.0,
-            aggregate_rps=10.0,
             status=RequestStatus.SUCCESS,
             status_code=200,
             latency_ms=150.0,
@@ -53,7 +51,6 @@ def test_compute_stage_metrics_success():
             token_label="user-b",
             active_users=1,
             target_rps=5.0,
-            aggregate_rps=10.0,
             status=RequestStatus.SUCCESS,
             status_code=200,
             latency_ms=250.0,
@@ -67,7 +64,6 @@ def test_compute_stage_metrics_success():
         elapsed_seconds=5.0,
         metrics=metrics,
         target_rps=5.0,
-        aggregate_rps=10.0,
         active_users=1,
     )
     assert result.total_requests == 2
@@ -90,7 +86,6 @@ def test_compute_stage_metrics_with_failures():
             token_label="user-a",
             active_users=1,
             target_rps=5.0,
-            aggregate_rps=10.0,
             status=RequestStatus.SUCCESS,
             status_code=200,
             latency_ms=100.0,
@@ -106,7 +101,6 @@ def test_compute_stage_metrics_with_failures():
             token_label="user-b",
             active_users=1,
             target_rps=5.0,
-            aggregate_rps=10.0,
             status=RequestStatus.FAILURE,
             status_code=500,
             latency_ms=50.0,
@@ -120,7 +114,6 @@ def test_compute_stage_metrics_with_failures():
         elapsed_seconds=1.0,
         metrics=metrics,
         target_rps=5.0,
-        aggregate_rps=10.0,
         active_users=1,
     )
     assert result.total_requests == 2

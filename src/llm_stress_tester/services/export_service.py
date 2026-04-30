@@ -202,6 +202,7 @@ def _write_raw_sheet(
     """
     unit = summary.config.rate_unit if summary.config else RateUnit.RPS
     sfx = column_suffix(unit)
+    achieved_by_stage = {s.stage_index: s.achieved_rps for s in (summary.stage_metrics or [])}
     data = [
         {
             "stage": m.stage_index,
@@ -210,7 +211,7 @@ def _write_raw_sheet(
             "token_label": m.token_label,
             "active_users": m.active_users,
             f"target_{sfx}": round(to_display(m.target_rps, unit)[0], 2),
-            f"aggregate_{sfx}": round(to_display(m.aggregate_rps, unit)[0], 2),
+            f"achieved_{sfx}": round(to_display(achieved_by_stage.get(m.stage_index, 0.0), unit)[0], 2),
             "status": m.status,
             "status_code": m.status_code,
             "latency_ms": round(m.latency_ms, 2),
@@ -220,10 +221,15 @@ def _write_raw_sheet(
         }
         for m in summary.metrics
     ]
-    if data:
-        pd.DataFrame(data).to_excel(
-            writer, sheet_name="raw_requests", index=False,
-        )
+    if not data:
+        cols = [
+            "stage", "model", "token_idx", "token_label", "active_users",
+            f"target_{sfx}", f"achieved_{sfx}",
+            "status", "status_code", "latency_ms", "error_type", "suite_id", "prompt_id",
+        ]
+        pd.DataFrame(columns=cols).to_excel(writer, sheet_name="raw_requests", index=False)
+    else:
+        pd.DataFrame(data).to_excel(writer, sheet_name="raw_requests", index=False)
 
 
 def _write_stage_sheet(

@@ -10,19 +10,6 @@ def compute_allocated_rps(base_rps: float, percentage: float) -> float:
     return base_rps * percentage / 100.0
 
 
-def compute_total_outgoing_rps(
-    base_rps: float, models: list[ModelEntry],
-) -> float:
-    """Total outgoing RPS accounting for duplicated traffic (100% models)."""
-    total = base_rps
-    for m in models:
-        if m.percentage == 100:
-            total += base_rps
-        else:
-            total += compute_allocated_rps(base_rps, m.percentage)
-    return total
-
-
 def pick_model(
     round_total: int, models: list[ModelEntry],
 ) -> dict[str, object]:

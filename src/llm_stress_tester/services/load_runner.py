@@ -20,10 +20,7 @@ from llm_stress_tester.schemas import (
 from llm_stress_tester.services.http_client import send_request
 from llm_stress_tester.services.metrics import compute_stage_metrics
 from llm_stress_tester.services.schedule import build_schedule
-from llm_stress_tester.services.traffic_allocator import (
-    compute_total_outgoing_rps,
-    pick_model,
-)
+from llm_stress_tester.services.traffic_allocator import pick_model
 
 
 async def run_test(
@@ -94,7 +91,6 @@ async def run_test(
                 current_users = n_users
             else:
                 current_users = min(n_users, len(config.tokens)) if config.tokens else n_users
-            total_out = compute_total_outgoing_rps(target_rps, config.models)
 
             loop = asyncio.get_running_loop()
             stage_start = loop.time()
@@ -141,7 +137,6 @@ async def run_test(
                         token_idx,
                         current_users,
                         target_rps,
-                        total_out,
                         stage.stage_index,
                         prompt_text,
                     )
@@ -195,7 +190,6 @@ async def run_test(
                 cumulative_prev_s,
                 stage_metrics_this,
                 target_rps,
-                total_out,
                 current_users,
             )
             summary.stage_metrics.append(stage_summary)
@@ -230,7 +224,6 @@ async def _execute_request(
     token_idx: int,
     active_users: int,
     target_rps: float,
-    aggregate_rps: float,
     stage_index: int,
     prompt_text: str,
 ) -> RequestMetric:
@@ -253,7 +246,6 @@ async def _execute_request(
             token_label=token.label or f"user-{token_idx}",
             active_users=active_users,
             target_rps=target_rps,
-            aggregate_rps=aggregate_rps,
             status=status,
             status_code=code,
             latency_ms=latency_ms,
@@ -270,7 +262,6 @@ async def _execute_request(
             token_label=token.label or f"user-{token_idx}",
             active_users=active_users,
             target_rps=target_rps,
-            aggregate_rps=aggregate_rps,
             status=RequestStatus.TIMEOUT,
             status_code=None,
             latency_ms=0.0,
@@ -287,7 +278,6 @@ async def _execute_request(
             token_label=token.label or f"user-{token_idx}",
             active_users=active_users,
             target_rps=target_rps,
-            aggregate_rps=aggregate_rps,
             status=RequestStatus.ERROR,
             status_code=None,
             latency_ms=0.0,
