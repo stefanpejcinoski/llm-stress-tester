@@ -6,6 +6,7 @@ on:
   pull_request:
 
 jobs:
+  # ── Lint ────────────────────────────────────────────────────────────────────
   lint:
     runs-on: windows-latest
     steps:
@@ -14,7 +15,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.14"
+          python-version: "3.13"
 
       - name: Install dependencies
         run: |
@@ -24,6 +25,7 @@ jobs:
       - name: Run ruff linter
         run: ruff check src/
 
+  # ── Tests ───────────────────────────────────────────────────────────────────
   test:
     runs-on: windows-latest
     steps:
@@ -32,7 +34,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.14"
+          python-version: "3.13"
 
       - name: Install dependencies
         run: |
@@ -41,3 +43,58 @@ jobs:
 
       - name: Run tests
         run: python -m pytest --tb=short -q
+
+  # ── Build executables ────────────────────────────────────────────────────────
+  # Only runs on push to main/master (not PRs) and only if lint + test pass.
+  # Produces one artifact per platform, available for 30 days on the Actions tab.
+  build:
+    needs: [lint, test]
+    if: github.event_name == 'push'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # PyInstaller 6.x has stable support for Python 3.13.
+      # Lint/test stay on 3.13 above; keeping the same version here.
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install runtime dependencies and PyInstaller
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e "."
+          pip install pyinstaller
+
+      # --onefile        : single self-contained binary
+      # --collect-data   : bundles Streamlit's static HTML/JS/CSS assets
+      # --collect-all    : also captures Streamlit's internal Python modules
+      # --hidden-import  : catches deps missed by PyInstaller's static analysis
+      - name: Build with PyInstaller
+        run: >
+          pyinstaller
+          --onefile
+          --name llm-stress-tester
+          --collect-data streamlit
+          --collect-all streamlit
+          --hidden-import streamlit
+          --hidden-import pydantic
+          --hidden-import httpx
+          --hidden-import pandas
+          --hidden-import matplotlib
+          --hidden-import xlsxwriter
+          --hidden-import llm_stress_tester
+          launcher.py
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: llm-stress-tester-${{ matrix.os }}
+          path: dist/
+          retention-days: 30
