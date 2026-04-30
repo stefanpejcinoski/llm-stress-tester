@@ -21,7 +21,6 @@ from llm_stress_tester.services.http_client import send_request
 from llm_stress_tester.services.metrics import compute_stage_metrics
 from llm_stress_tester.services.schedule import build_schedule
 from llm_stress_tester.services.traffic_allocator import (
-    compute_allocated_rps,
     compute_total_outgoing_rps,
     pick_model,
 )
@@ -105,75 +104,84 @@ async def run_test(
             stage_failed = 0
             stage_count = 0
 
+            # Interval between requests (seconds). Enforces target_rps exactly
+            # regardless of endpoint latency. At 200 RPM (3.33 RPS) this is
+            # 0.3 s; at 6 RPM (0.1 RPS) this is 10 s.
+            interval_s = 1.0 / max(target_rps, 1e-6)
+
+            # Semaphore caps in-flight concurrent requests to active_users.
+            # Requests that can't acquire a slot wait until one is released.
+            semaphore = asyncio.Semaphore(max(current_users, 1))
+
             while loop.time() < end_time:
-                for model in config.models:
-                    per_model_rps = compute_allocated_rps(
-                        target_rps, model.percentage,
+                tick_start = loop.time()
+
+                round_total += 1
+                model_pick = pick_model(round_total, config.models)
+                m_name = model_pick["model"]
+                m_pct = model_pick["percentage"]
+                if has_tokens:
+                    token_idx = round_total % len(config.tokens)
+                    token = config.tokens[token_idx]
+                else:
+                    token_idx = 0
+                    token = _PUBLIC_SENTINEL
+                prompt_idx = round_total % len(prompts) if prompts else 0
+                prompt_text = prompts[prompt_idx] if prompts else ""
+
+                # Acquire a concurrency slot, fire the request, release slot
+                async with semaphore:
+                    result = await _execute_request(
+                        http,
+                        config,
+                        req_url,
+                        m_name,
+                        m_pct,
+                        token,
+                        token_idx,
+                        current_users,
+                        target_rps,
+                        total_out,
+                        stage.stage_index,
+                        prompt_text,
                     )
-                    n_reqs_for_model = max(1, int(per_model_rps * 1.0))
 
-                    tasks = []
-                    for _ in range(n_reqs_for_model):
-                        round_total += 1
-                        model_pick = pick_model(round_total, config.models)
-                        m_name = model_pick["model"]
-                        m_pct = model_pick["percentage"]
-                        if has_tokens:
-                            token_idx = round_total % len(config.tokens)
-                            token = config.tokens[token_idx]
-                        else:
-                            token_idx = 0
-                            token = _PUBLIC_SENTINEL
-                        prompt_idx = round_total % len(prompts) if prompts else 0
-                        prompt_text = prompts[prompt_idx] if prompts else ""
+                summary.metrics.append(result)
+                stage_count += 1
+                if result.status == RequestStatus.SUCCESS:
+                    stage_successful += 1
+                else:
+                    stage_failed += 1
 
-                        tasks.append(
-                            _execute_request(
-                                http,
-                                config,
-                                req_url,
-                                m_name,
-                                m_pct,
-                                token,
-                                token_idx,
-                                current_users,
-                                target_rps,
-                                total_out,
-                                stage.stage_index,
-                                prompt_text,
-                            ),
-                        )
+                # Check for cancellation
+                if cancel_event is not None and cancel_event.is_set():
+                    break
 
-                    results = await asyncio.gather(*tasks)
-                    for m in results:
-                        summary.metrics.append(m)
-                        stage_count += 1
-                        if m.status == RequestStatus.SUCCESS:
-                            stage_successful += 1
-                        else:
-                            stage_failed += 1
+                # Emit live progress after every request
+                if on_progress:
+                    stage_elapsed_s = loop.time() - stage_start
+                    achieved_rps = stage_count / max(stage_elapsed_s, 0.001)
+                    on_progress(ProgressInfo(
+                        stage_index=stage.stage_index,
+                        total_metrics=len(summary.metrics),
+                        total_requests=round_total,
+                        target_rps=target_rps,
+                        achieved_rps=achieved_rps,
+                        active_users=current_users,
+                        elapsed_ms=(cumulative_prev_s + stage_elapsed_s) * 1000,
+                        successful=stage_successful,
+                        failed=stage_failed,
+                        stage_elapsed_s=stage_elapsed_s,
+                        stage_duration_s=stage.duration,
+                    ))
 
-                    # Check for cancellation after each batch
-                    if cancel_event is not None and cancel_event.is_set():
-                        break
-
-                    # Mid-stage progress emission after every gather batch
-                    if on_progress:
-                        stage_elapsed_s = loop.time() - stage_start
-                        achieved_rps = stage_count / max(stage_elapsed_s, 0.001)
-                        on_progress(ProgressInfo(
-                            stage_index=stage.stage_index,
-                            total_metrics=len(summary.metrics),
-                            total_requests=round_total,
-                            target_rps=target_rps,
-                            achieved_rps=achieved_rps,
-                            active_users=current_users,
-                            elapsed_ms=(cumulative_prev_s + stage_elapsed_s) * 1000,
-                            successful=stage_successful,
-                            failed=stage_failed,
-                            stage_elapsed_s=stage_elapsed_s,
-                            stage_duration_s=stage.duration,
-                        ))
+                # Sleep for the remainder of the interval so we hit target_rps.
+                # If the request took longer than interval_s, sleep_for <= 0
+                # and we skip the sleep — achieved RPS is naturally capped by
+                # endpoint latency in that case.
+                sleep_for = interval_s - (loop.time() - tick_start)
+                if sleep_for > 0:
+                    await asyncio.sleep(sleep_for)
 
             # If cancelled mid-stage, still record what was collected then stop
             cancelled = cancel_event is not None and cancel_event.is_set()
