@@ -61,33 +61,54 @@ async def run_test(
         )
 
         round_total = 0
-        elapsed = 0.0
+        cumulative_prev_s = 0.0
         has_tokens = bool(config.tokens)
 
+        # Emit an initial placeholder so the UI cards appear immediately
+        if on_progress and stages:
+            first_stage = stages[0]
+            first_users = (
+                first_stage.active_users
+                if config.is_public
+                else min(first_stage.active_users, len(config.tokens)) if config.tokens else first_stage.active_users
+            )
+            on_progress(ProgressInfo(
+                stage_index=0,
+                total_metrics=0,
+                total_requests=0,
+                target_rps=first_stage.target_rps,
+                achieved_rps=0.0,
+                active_users=first_users,
+                elapsed_ms=0.0,
+                successful=0,
+                failed=0,
+                stage_elapsed_s=0.0,
+                stage_duration_s=first_stage.duration,
+            ))
+
         for stage in stages:
-            stage_results: list[tuple[RequestMetric]] = []
             target_rps = stage.target_rps
             n_users = stage.active_users
             if config.is_public:
                 current_users = n_users
             else:
                 current_users = min(n_users, len(config.tokens)) if config.tokens else n_users
-            total_out = compute_total_outgoing_rps(
-                target_rps, config.models,
-            )
+            total_out = compute_total_outgoing_rps(target_rps, config.models)
+
             loop = asyncio.get_running_loop()
-            end_time = loop.time() + stage.duration
+            stage_start = loop.time()
+            end_time = stage_start + stage.duration
+
+            stage_successful = 0
+            stage_failed = 0
+            stage_count = 0
 
             while loop.time() < end_time:
                 for model in config.models:
                     per_model_rps = compute_allocated_rps(
                         target_rps, model.percentage,
                     )
-                    n_reqs_for_model = max(
-                        1, int(per_model_rps * 1.0),
-                    )
-                    if n_reqs_for_model == 0:
-                        n_reqs_for_model = 1
+                    n_reqs_for_model = max(1, int(per_model_rps * 1.0))
 
                     tasks = []
                     for _ in range(n_reqs_for_model):
@@ -124,46 +145,44 @@ async def run_test(
                     results = await asyncio.gather(*tasks)
                     for m in results:
                         summary.metrics.append(m)
-                        stage_results.append((m,))
+                        stage_count += 1
+                        if m.status == RequestStatus.SUCCESS:
+                            stage_successful += 1
+                        else:
+                            stage_failed += 1
 
+                    # Mid-stage progress emission after every gather batch
+                    if on_progress:
+                        stage_elapsed_s = loop.time() - stage_start
+                        achieved_rps = stage_count / max(stage_elapsed_s, 0.001)
+                        on_progress(ProgressInfo(
+                            stage_index=stage.stage_index,
+                            total_metrics=len(summary.metrics),
+                            total_requests=round_total,
+                            target_rps=target_rps,
+                            achieved_rps=achieved_rps,
+                            active_users=current_users,
+                            elapsed_ms=(cumulative_prev_s + stage_elapsed_s) * 1000,
+                            successful=stage_successful,
+                            failed=stage_failed,
+                            stage_elapsed_s=stage_elapsed_s,
+                            stage_duration_s=stage.duration,
+                        ))
+
+            # End-of-stage: compute and store stage metrics
             stage_metrics_this = [
                 m for m in summary.metrics if m.stage_index == stage.stage_index
             ]
             stage_summary = compute_stage_metrics(
                 stage.stage_index,
-                elapsed,
+                cumulative_prev_s,
                 stage_metrics_this,
                 target_rps,
                 total_out,
                 current_users,
             )
             summary.stage_metrics.append(stage_summary)
-            elapsed += stage.duration
-
-            if on_progress:
-                successful = sum(
-                    1 for m in stage_metrics_this
-                    if m.status == RequestStatus.SUCCESS
-                )
-                failed = len(stage_metrics_this) - successful
-                achieved_rps = (
-                    len(stage_metrics_this) / elapsed
-                    if elapsed > 0 else 0
-                )
-                elapsed_ms = elapsed * 1000
-                on_progress(
-                    ProgressInfo(
-                        stage_index=stage.stage_index + 1,
-                        total_metrics=len(summary.metrics),
-                        total_requests=round_total,
-                        target_rps=target_rps,
-                        achieved_rps=achieved_rps,
-                        active_users=current_users,
-                        elapsed_ms=elapsed_ms,
-                        successful=successful,
-                        failed=failed,
-                    ),
-                )
+            cumulative_prev_s += stage.duration
 
         summary.status = "completed"
     except asyncio.CancelledError:

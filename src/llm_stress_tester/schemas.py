@@ -23,6 +23,8 @@ class ProgressInfo:
     elapsed_ms: float
     successful: int
     failed: int
+    stage_elapsed_s: float = 0.0
+    stage_duration_s: float = 0.0
 
 
 class TokenEntry(BaseModel):
