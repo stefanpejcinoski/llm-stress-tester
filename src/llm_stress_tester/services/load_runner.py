@@ -10,6 +10,7 @@ from llm_stress_tester.constants import DEFAULT_TIMEOUT
 from llm_stress_tester.data.prompts import BENCHMARK_PROMPTS
 from llm_stress_tester.enums import RequestStatus
 from llm_stress_tester.schemas import (
+    ProgressInfo,
     RequestMetric,
     RunSummary,
     TestConfig,
@@ -74,9 +75,10 @@ async def run_test(
             total_out = compute_total_outgoing_rps(
                 target_rps, config.models,
             )
-            end_time = asyncio.get_event_loop().time() + stage.duration
+            loop = asyncio.get_running_loop()
+            end_time = loop.time() + stage.duration
 
-            while asyncio.get_event_loop().time() < end_time:
+            while loop.time() < end_time:
                 for model in config.models:
                     per_model_rps = compute_allocated_rps(
                         target_rps, model.percentage,
@@ -139,11 +141,37 @@ async def run_test(
             elapsed += stage.duration
 
             if on_progress:
-                on_progress(stage.stage_index, len(summary.metrics))
+                successful = sum(
+                    1 for m in stage_metrics_this
+                    if m.status == RequestStatus.SUCCESS
+                )
+                failed = len(stage_metrics_this) - successful
+                achieved_rps = (
+                    len(stage_metrics_this) / elapsed
+                    if elapsed > 0 else 0
+                )
+                elapsed_ms = elapsed * 1000
+                on_progress(
+                    ProgressInfo(
+                        stage_index=stage.stage_index + 1,
+                        total_metrics=len(summary.metrics),
+                        total_requests=round_total,
+                        target_rps=target_rps,
+                        achieved_rps=achieved_rps,
+                        active_users=current_users,
+                        elapsed_ms=elapsed_ms,
+                        successful=successful,
+                        failed=failed,
+                    ),
+                )
 
         summary.status = "completed"
-    except Exception:
+    except asyncio.CancelledError:
         summary.status = "error"
+        summary.error_message = "Test cancelled"
+    except Exception as exc:
+        summary.status = "error"
+        summary.error_message = f"{type(exc).__name__}: {exc}"
     finally:
         await http.aclose()
 

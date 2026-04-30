@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import threading
+import time
+from concurrent.futures import Future, ThreadPoolExecutor
 
 import streamlit as st
 
 from llm_stress_tester.data.prompts import SUITES_DESCRIPTIONS
 from llm_stress_tester.enums import BenchmarkSuite
-from llm_stress_tester.schemas import TestConfig
+from llm_stress_tester.schemas import ProgressInfo, RunSummary, TestConfig
 from llm_stress_tester.services.export_service import export_pdf, export_xlsx
 from llm_stress_tester.services.load_runner import run_test
 from llm_stress_tester.services.schedule import build_schedule
@@ -28,6 +31,45 @@ from llm_stress_tester.utils.validation import (
     validate_token_count,
     validate_user_schedule,
 )
+
+# Module-level executor lives across Streamlit reruns
+_EXECUTOR = ThreadPoolExecutor(max_workers=4)
+
+
+# Thread-safe progress holder. The background thread writes; the main thread reads.
+# A simple dict + lock is enough for this one-writer, one-reader pattern.
+class _ProgressHolder:
+    """Thread-safe holder for live progress updates."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._info: ProgressInfo | None = None
+
+    def set(self, info: ProgressInfo) -> None:
+        with self._lock:
+            self._info = info
+
+    def get(self) -> ProgressInfo | None:
+        with self._lock:
+            return self._info
+
+
+def _run_test_in_thread(
+    config: TestConfig,
+    holder: _ProgressHolder,
+) -> RunSummary:
+    """Run the async load test in this worker thread's event loop.
+
+    Returns the RunSummary when complete. Exceptions inside run_test
+    are captured in summary.error_message.
+    """
+    def _on_progress(info: ProgressInfo) -> None:
+        holder.set(info)
+
+    async def _runner() -> RunSummary:
+        return await run_test(config, on_progress=_on_progress)
+
+    return asyncio.run(_runner())
 
 
 def main():
@@ -50,8 +92,10 @@ def main():
         st.session_state.summary = None
     if "running" not in st.session_state:
         st.session_state.running = False
-    if "progress" not in st.session_state:
-        st.session_state.progress = 0
+    if "future" not in st.session_state:
+        st.session_state.future = None
+    if "progress_holder" not in st.session_state:
+        st.session_state.progress_holder = None
 
     # ── Forms ────────────────────────────────────────────────────
     # Step 1: Endpoint
@@ -92,24 +136,20 @@ def main():
     # ── Validate ─────────────────────────────────────────────────
     errors: list[str] = []
 
-    # Token validation
     if tokens:
         validation_errors = validate_token_count(
             len(tokens), min_users, max_users,
         )
         errors.extend(validation_errors)
 
-    # Model validation
     model_errors = validate_models(models)
     errors.extend(model_errors)
 
-    # Rate validation
     rate_errors = validate_rate_schedule(
         initial_rate, max_rate, scaling_factor, time_increment,
     )
     errors.extend(rate_errors)
 
-    # User validation
     user_errors = validate_user_schedule(
         min_users, max_users, users_increment,
     )
@@ -173,10 +213,6 @@ def main():
             },
         )
 
-    # ── Progress indicator ───────────────────────────────────────
-    progress_bar = st.empty()
-    status_text = st.empty()
-
     # ── Determine total stages ──────────────────────────────────
     try:
         stages = build_schedule(
@@ -193,30 +229,80 @@ def main():
         stages = []
         total_stages = 0
 
+    # ── Progress placeholders (visible while running) ────────────
+    progress_bar = st.empty()
+    live_metrics = st.empty()
+    status_col = st.empty()
+
+    # ── Check on the running future ───────────────────────────────
+    future: Future | None = st.session_state.future
+    if st.session_state.running and future is not None and future.done():
+        # Test finished (or errored). Pull the result.
+        try:
+            st.session_state.summary = future.result()
+        except Exception as exc:
+            # Build a synthetic error summary so the UI can show it
+            summary = RunSummary(config=config, status="error")
+            summary.error_message = f"{type(exc).__name__}: {exc}"
+            st.session_state.summary = summary
+        st.session_state.running = False
+        st.session_state.future = None
+        st.rerun()
+
     # ── Submit button ────────────────────────────────────────────
     if st.session_state.running:
-        # Running state - show progress
-        status_text.text(f"Running test... Stage {st.session_state.progress}/{total_stages}")
-        progress_bar.progress(
-            st.session_state.progress / max(total_stages, 1),
-            text=f"Progress: {st.session_state.progress}/{total_stages} stages",
-        )
+        holder: _ProgressHolder = st.session_state.progress_holder
+        live = holder.get() if holder else None
 
-        if st.button("Stop Test", type="primary"):
-            st.session_state.running = False
-            st.session_state.progress = st.session_state.progress or 0
-            st.rerun()
+        if live:
+            pct = min(live.stage_index / max(total_stages, 1), 1.0)
+            progress_bar.progress(
+                pct,
+                text=f"Stage {live.stage_index}/{max(total_stages, 1)} completed",
+            )
 
-    elif st.button("Start Load Test", type="primary", disabled=len(stages) == 0):
-        # Start new test
-        st.session_state.running = True
-        st.session_state.progress = 0
+            with live_metrics.container():
+                cols = st.columns(5)
+                cols[0].metric("Target RPS", f"{live.target_rps:.0f}")
+                cols[1].metric("Achieved RPS", f"{live.achieved_rps:.0f}")
+                cols[2].metric("Active Users", live.active_users)
+                cols[3].metric("Collected", f"{live.total_metrics:,}")
+                cols[4].metric("Failed", f"{live.failed:,}")
+
+                elapsed_s = live.elapsed_ms / 1000
+                info_text = (
+                    f"Stage {live.stage_index}/{total_stages} -- "
+                    f"{elapsed_s:.0f}s elapsed -- "
+                    f"{live.total_metrics:,}/{live.total_requests:,} "
+                    f"requests -- {live.successful:,} ok, "
+                    f"{live.failed:,} fail"
+                )
+                status_col.caption(info_text)
+        else:
+            progress_bar.progress(0.05, text="Starting test...")
+            status_col.caption(
+                f"Connecting to {config.base_url.rstrip('/')}/"
+                f"{config.api_path.lstrip('/')}",
+            )
+
+        # Auto-refresh while running so live metrics update
+        time.sleep(2)
+        st.rerun()
+
+    elif st.button(
+        "Start Load Test", type="primary", disabled=len(stages) == 0,
+    ):
+        # Spin up a background thread for the test
+        holder = _ProgressHolder()
+        st.session_state.progress_holder = holder
         st.session_state.summary = None
+        st.session_state.running = True
+        st.session_state.future = _EXECUTOR.submit(
+            _run_test_in_thread, config, holder,
+        )
         st.rerun()
 
     elif len(stages) > 0:
-        progress_bar.empty()
-        status_text.empty()
         st.success(
             "Ready to test! "
             f"{total_stages} stages in schedule. "
@@ -224,42 +310,22 @@ def main():
             f"-- and max users -- {max_users}.",
         )
 
-    # ── Run test ─────────────────────────────────────────────────
-    if st.session_state.running and not st.session_state.summary:
-        progress_bar.progress(
-            0.1,
-            text="Starting test...",
-        )
-        st.session_state.progress = 1
-
-        async def run_async():
-            """Run the load test asynchronously."""
-            async def on_progress(stage_idx, metric_count):
-                st.session_state.progress = stage_idx + 1
-
-            summary = await run_test(config, on_progress=on_progress)
-            return summary
-
-        # Monkey-patch st.rerun for use inside asyncio
-        _original_rerun = st.rerun
-        st.rerun = _original_rerun
-
-        try:
-            summary = asyncio.run(run_async())
-            st.session_state.summary = summary
-            st.session_state.running = False
-            st.rerun()
-        except Exception as exc:
-            st.error(f"Test failed: {exc}")
-            st.session_state.running = False
-            st.session_state.progress = 0
-
     # ── Display results ──────────────────────────────────────────
     summary = st.session_state.summary
 
     if summary and summary.status == "error":
         st.error("Test completed with errors.")
-        st.text(f"Error: {summary}")
+        endpoint_url = (
+            f"{summary.config.base_url.rstrip('/')}/"
+            f"{summary.config.api_path.lstrip('/')}"
+        )
+        st.write("**Endpoint:**", endpoint_url)
+        if summary.error_message:
+            st.code(summary.error_message, language="text")
+        else:
+            st.write(
+                f"No requests were sent. {len(summary.metrics)} metrics collected.",
+            )
 
     elif summary and summary.status in ("completed", "running"):
         st.success("Load test completed!")

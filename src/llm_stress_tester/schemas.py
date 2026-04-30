@@ -10,6 +10,21 @@ from pydantic import BaseModel, Field
 from llm_stress_tester.enums import BenchmarkSuite, RateUnit, RequestStatus
 
 
+@dataclass
+class ProgressInfo:
+    """Live progress info passed to the UI via callback."""
+
+    stage_index: int
+    total_metrics: int
+    total_requests: int
+    target_rps: float
+    achieved_rps: float
+    active_users: int
+    elapsed_ms: float
+    successful: int
+    failed: int
+
+
 class TokenEntry(BaseModel):
     """Single API token with optional label."""
 
@@ -105,3 +120,4 @@ class RunSummary:
     metrics: list[RequestMetric] = field(default_factory=list)
     stage_metrics: list[StageMetric] = field(default_factory=list)
     status: Literal["running", "completed", "error"] = "running"
+    error_message: str = ""
