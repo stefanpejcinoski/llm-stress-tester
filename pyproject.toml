@@ -5,6 +5,7 @@ description = "Load tester for OpenAI-compatible LLM inference endpoints"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "altair>=5.0",
     "streamlit>=1.45",
     "httpx>=0.28",
     "pydantic>=2.0",

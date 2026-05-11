@@ -1,177 +1,141 @@
-"""Streamlit chart rendering for LLM stress test results.
-
-Uses matplotlib under the hood (Agg backend) and renders via
-st.pyplot so no external charting library is needed.
-"""
+"""Streamlit chart rendering for LLM stress test results."""
 
 from __future__ import annotations
 
-import matplotlib
-import matplotlib.pyplot as plt
-import numpy as np
+import altair as alt
 import pandas as pd
 import streamlit as st
-from matplotlib.ticker import FuncFormatter
-
-matplotlib.use("Agg")
 
 from llm_stress_tester.enums import RateUnit
 from llm_stress_tester.schemas import RunSummary
 from llm_stress_tester.utils.rate_units import column_suffix, to_display
 
 
-def _rate_fmt(val: float, _pos: int) -> str:
-    """Adaptive rate tick: 2 decimals <10, 1 decimal <100, integers above."""
-    if val >= 100:
-        return f"{val:.0f}"
-    if val >= 10:
-        return f"{val:.1f}"
-    return f"{val:.2f}"
+def _build_rate_chart_df(summary: RunSummary) -> pd.DataFrame:
+    """Build long-form dataframe for target vs achieved RPM chart."""
+    rows: list[dict[str, float | int | str]] = []
+    for stage in summary.stage_metrics:
+        target_rpm = stage.target_rps * 60.0
+        achieved_rpm = stage.achieved_rps * 60.0
+        common = {
+            "stage_index": stage.stage_index,
+            "active_users": stage.active_users,
+            "total_requests": stage.total_requests,
+        }
+        rows.append({
+            **common,
+            "series": "Target RPM",
+            "rpm": target_rpm,
+        })
+        rows.append({
+            **common,
+            "series": "Achieved RPM",
+            "rpm": achieved_rpm,
+        })
+    return pd.DataFrame(rows)
+
+
+def _compute_scale_info(df: pd.DataFrame) -> dict[str, float | bool]:
+    """Compute y-axis scaling behavior from target/achieved peaks."""
+    target_df = df.loc[df["series"] == "Target RPM", ["stage_index", "rpm"]]
+    target_max = float(target_df["rpm"].max())
+    target_peak_stage = int(target_df.loc[target_df["rpm"].idxmax(), "stage_index"])
+    achieved_max = float(df.loc[df["series"] == "Achieved RPM", "rpm"].max())
+
+    if achieved_max <= 0:
+        return {
+            "use_achieved_scale": target_max > 0,
+            "y_max": 1.0,
+            "target_max": target_max,
+            "target_peak_stage": target_peak_stage,
+            "achieved_max": achieved_max,
+        }
+
+    ratio = target_max / achieved_max
+    use_achieved_scale = ratio > 10.0
+    y_max = max(1.0, achieved_max * 1.15) if use_achieved_scale else max(target_max, achieved_max)
+    return {
+        "use_achieved_scale": use_achieved_scale,
+        "y_max": y_max,
+        "target_max": target_max,
+        "target_peak_stage": target_peak_stage,
+        "achieved_max": achieved_max,
+    }
 
 
 def render_charts(summary: RunSummary, num_rows: int) -> None:
-    """Render a 3x2 grid of charts showing test results.
+    """Render native Streamlit chart(s) for test results."""
+    del num_rows  # API compatibility placeholder
 
-    Arguments:
-        summary: The completed RunSummary object.
-        num_rows: Unused placeholder (kept for API compat).
-
-    """
     stage_metrics = summary.stage_metrics
     if not stage_metrics:
         return
 
-    # ── 1. RPS over time (target vs achieved) ──────────────────
-    fig, axes = plt.subplots(3, 2, figsize=(16, 18))
-    fig.suptitle("LLM Stress Test Results", fontsize=16)
+    df = _build_rate_chart_df(summary)
+    if df.empty:
+        return
 
-    elapsed = [s.elapsed_seconds for s in stage_metrics]
+    scale = _compute_scale_info(df)
+    y_encoding = alt.Y("rpm:Q", title="RPM")
+    if scale["use_achieved_scale"]:
+        y_encoding = alt.Y("rpm:Q", title="RPM", scale=alt.Scale(domain=[0, scale["y_max"]]))
 
-    ax00 = axes[0, 0]
-    unit = summary.config.rate_unit if summary.config else RateUnit.RPS
-    target_raw = [s.target_rps for s in stage_metrics]
-    achieved_raw = [s.achieved_rps for s in stage_metrics]
-    target_disp = [to_display(v, unit)[0] for v in target_raw]
-    achieved_disp = [to_display(v, unit)[0] for v in achieved_raw]
-    _, rate_label = to_display(1.0, unit)  # "RPS" or "RPM"
-
-    # Left axis: Target rate
-    (line_t,) = ax00.plot(
-        elapsed, target_disp, marker="o", color="steelblue", label=f"Target {rate_label}",
-    )
-    ax00.set_xlabel("Elapsed (s)")
-    ax00.set_ylabel(f"Target {rate_label}", color="steelblue")
-    ax00.tick_params(axis="y", labelcolor="steelblue")
-    ax00.yaxis.set_major_formatter(FuncFormatter(_rate_fmt))
-    ax00.grid(True, alpha=0.4)
-
-    # Right axis: Achieved rate — independently scaled, never a flat line
-    ax00b = ax00.twinx()
-    (line_a,) = ax00b.plot(
-        elapsed, achieved_disp, marker="s", color="crimson", label=f"Achieved {rate_label}",
-    )
-    ax00b.set_ylabel(f"Achieved {rate_label}", color="crimson")
-    ax00b.tick_params(axis="y", labelcolor="crimson")
-    ax00b.yaxis.set_major_formatter(FuncFormatter(_rate_fmt))
-
-    ax00.set_title(f"{rate_label} Over Time (Target vs Achieved)")
-    ax00.legend(handles=[line_t, line_a], loc="upper left")
-
-    # ── 2. Latency percentiles ─────────────────────────────────
-    ax01 = axes[0, 1]
-    p50 = [s.p50_latency_ms for s in stage_metrics]
-    p95 = [s.p95_latency_ms for s in stage_metrics]
-    p99 = [s.p99_latency_ms for s in stage_metrics]
-    ax01.plot(elapsed, p50, label="P50", color="green", marker="o")
-    ax01.plot(elapsed, p95, label="P95", color="orange", marker="s")
-    ax01.plot(elapsed, p99, label="P99", color="red", marker="^")
-    ax01.set_xlabel("Elapsed (s)")
-    ax01.set_ylabel("Latency (ms)")
-    ax01.set_title("Latency Percentiles")
-    ax01.legend()
-    ax01.grid(True)
-
-    # ── 3. Error rate over time ────────────────────────────────
-    ax10 = axes[1, 0]
-    error_rates = [s.error_rate * 100 for s in stage_metrics]
-    ax10.plot(elapsed, error_rates, marker="x", color="red", label="Error Rate (%)")
-    ax10.set_xlabel("Elapsed (s)")
-    ax10.set_ylabel("Error Rate (%)")
-    ax10.set_title("Error Rate Over Time")
-    ax10.legend()
-    ax10.grid(True)
-
-    # ── 4. Requests per stage ──────────────────────────────────
-    ax11 = axes[1, 1]
-    stages = list(range(len(stage_metrics)))
-    totals = [s.total_requests for s in stage_metrics]
-    colors = ["steelblue" if s.successful >= s.total_requests * 0.95 else "coral"
-              for s in stage_metrics]
-    ax11.bar(stages, totals, color=colors)
-    ax11.set_xlabel("Stage Index")
-    ax11.set_ylabel("Total Requests")
-    ax11.set_title("Requests Per Stage")
-    ax11.grid(axis="y")
-
-    # ── 5. Model comparison (avg latency) ──────────────────────
-    ax20 = axes[2, 0]
-    per_model: dict[str, list[float]] = {}
-    for m in summary.metrics:
-        per_model.setdefault(m.model, []).append(m.latency_ms)
-
-    if per_model:
-        model_names = sorted(per_model.keys())
-        avg_latencies = [
-            sum(v) / len(v) for v in per_model.values()
-        ]
-        jitter = np.random.uniform(-0.15, 0.15, len(model_names))
-        ax20.scatter(
-            np.array(range(len(model_names))) + jitter,
-            avg_latencies,
-            color="purple",
-            s=80,
+    line_chart = (
+        alt.Chart(df)
+        .mark_line(point=True)
+        .encode(
+            x=alt.X("stage_index:O", title="Stage Index"),
+            y=y_encoding,
+            color=alt.Color("series:N", title="Series"),
+            tooltip=[
+                alt.Tooltip("stage_index:O", title="Stage"),
+                alt.Tooltip("series:N", title="Series"),
+                alt.Tooltip("rpm:Q", title="RPM", format=".2f"),
+                alt.Tooltip("active_users:Q", title="Active Users"),
+                alt.Tooltip("total_requests:Q", title="Requests"),
+            ],
         )
-        ax20.set_xticks(range(len(model_names)))
-        ax20.set_xticklabels(model_names, rotation=45, ha="right")
-        ax20.set_xlabel("Model")
-        ax20.set_ylabel("Avg Latency (ms)")
-        ax20.set_title("Model Comparison (Avg Latency)")
+    )
 
-    # ── 6. Success rate by model ───────────────────────────────
-    ax21 = axes[2, 1]
-    if per_model:
-        success_rates = []
-        for model_name in model_names:
-            model_reqs = per_model[model_name]
-            total = len(model_reqs)
-            # Reuse summary.metrics to count successes
-            from llm_stress_tester.enums import RequestStatus
-            model_metrics = [
-                m for m in summary.metrics if m.model == model_name
-            ]
-            successful = sum(
-                1 for m in model_metrics
-                if m.status == RequestStatus.SUCCESS
+    chart = line_chart
+    if scale["use_achieved_scale"]:
+        peak_stage = int(scale["target_peak_stage"])
+        note_df = pd.DataFrame([
+            {
+                "stage_index": peak_stage,
+                "rpm": float(scale["y_max"]) * 0.98,
+                "note": f"Target peak: {float(scale['target_max']):.2f} RPM (off-scale)",
+            },
+        ])
+        marker_df = pd.DataFrame([
+            {
+                "stage_index": peak_stage,
+                "rpm": float(scale["y_max"]),
+            },
+        ])
+        marker_layer = (
+            alt.Chart(marker_df)
+            .mark_point(shape="triangle-up", size=90, color="crimson")
+            .encode(
+                x=alt.X("stage_index:O"),
+                y=alt.Y("rpm:Q"),
             )
-            success_rates.append(
-                (successful / total) * 100 if total else 0,
-            )
-
-        jitter = np.random.uniform(-0.15, 0.15, len(model_names))
-        ax21.scatter(
-            np.array(range(len(model_names))) + jitter,
-            success_rates,
-            color="teal",
-            s=80,
         )
-        ax21.set_xticks(range(len(model_names)))
-        ax21.set_xticklabels(model_names, rotation=45, ha="right")
-        ax21.set_xlabel("Model")
-        ax21.set_ylabel("Success Rate (%)")
-        ax21.set_title("Per-Model Success Rate")
+        note_layer = (
+            alt.Chart(note_df)
+            .mark_text(align="left", baseline="bottom", dx=8, dy=-6, color="crimson")
+            .encode(
+                x=alt.X("stage_index:O"),
+                y=alt.Y("rpm:Q"),
+                text=alt.Text("note:N"),
+            )
+        )
+        chart = line_chart + marker_layer + note_layer
 
-    plt.tight_layout()
-    st.pyplot(fig)
+    chart = chart.properties(title="Target vs Achieved RPM", height=420).interactive()
+    st.altair_chart(chart, use_container_width=True)
+    if scale["use_achieved_scale"]:
+        st.caption("Y-axis auto-scaled to achieved RPM (target peak is >10x achieved peak).")
 
 
 def render_raw_metrics(summary: RunSummary, num_rows: int) -> None:

@@ -3,9 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
+from pathlib import Path
+
+_SRC_DIR = Path(__file__).resolve().parents[2] / "src"
+if str(_SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(_SRC_DIR))
 
 import streamlit as st
 

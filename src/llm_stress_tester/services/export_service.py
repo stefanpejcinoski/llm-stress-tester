@@ -7,22 +7,12 @@ from io import BytesIO
 import matplotlib
 import matplotlib.pyplot as plt
 import pandas as pd
-from matplotlib.ticker import FuncFormatter
 
 matplotlib.use("Agg")
 
 from llm_stress_tester.enums import RateUnit
 from llm_stress_tester.schemas import RequestMetric, RunSummary
 from llm_stress_tester.utils.rate_units import column_suffix, to_display
-
-
-def _rate_fmt(val: float, _pos: int) -> str:
-    """Adaptive rate tick: 2 decimals <10, 1 decimal <100, integers above."""
-    if val >= 100:
-        return f"{val:.0f}"
-    if val >= 10:
-        return f"{val:.1f}"
-    return f"{val:.2f}"
 
 
 def export_xlsx(summary: RunSummary) -> bytes:
@@ -39,106 +29,21 @@ def export_xlsx(summary: RunSummary) -> bytes:
 
 
 def export_pdf(summary: RunSummary) -> bytes:
-    """Export graphs as a PDF file."""
-    fig, axes = plt.subplots(3, 2, figsize=(16, 18))
-    fig.suptitle("LLM Stress Test Results", fontsize=16)
+    """Export target vs achieved RPM chart as a PDF file."""
+    fig, ax = plt.subplots(figsize=(12, 6))
 
     stage_metrics = summary.stage_metrics
-    base_url = [s.elapsed_seconds for s in stage_metrics]
+    stage_idx = [s.stage_index for s in stage_metrics]
+    target_rpm = [s.target_rps * 60.0 for s in stage_metrics]
+    achieved_rpm = [s.achieved_rps * 60.0 for s in stage_metrics]
 
-    unit = summary.config.rate_unit if summary.config else RateUnit.RPS
-    _, rate_label = to_display(1.0, unit)  # "RPS" or "RPM"
-    target_disp = [to_display(s.target_rps, unit)[0] for s in stage_metrics]
-    achieved_disp = [to_display(s.achieved_rps, unit)[0] for s in stage_metrics]
-
-    ax0 = axes[0, 0]
-    # Left axis: Target rate
-    (line_t,) = ax0.plot(
-        base_url, target_disp, marker="o", color="steelblue", label=f"Target {rate_label}",
-    )
-    ax0.set_xlabel("Time (s)")
-    ax0.set_ylabel(f"Target {rate_label}", color="steelblue")
-    ax0.tick_params(axis="y", labelcolor="steelblue")
-    ax0.yaxis.set_major_formatter(FuncFormatter(_rate_fmt))
-    ax0.grid(True, alpha=0.4)
-
-    # Right axis: Achieved rate — independently scaled, never a flat line
-    ax0b = ax0.twinx()
-    (line_a,) = ax0b.plot(
-        base_url, achieved_disp, marker="s", color="crimson", label=f"Achieved {rate_label}",
-    )
-    ax0b.set_ylabel(f"Achieved {rate_label}", color="crimson")
-    ax0b.tick_params(axis="y", labelcolor="crimson")
-    ax0b.yaxis.set_major_formatter(FuncFormatter(_rate_fmt))
-
-    ax0.set_title(f"Aggregate {rate_label} Over Time")
-    ax0.legend(handles=[line_t, line_a], loc="upper left")
-
-    ax1 = axes[0, 1]
-    ax1.plot(base_url, [s.p50_latency_ms for s in stage_metrics], label="P50")
-    ax1.plot(base_url, [s.p95_latency_ms for s in stage_metrics], label="P95")
-    ax1.plot(base_url, [s.p99_latency_ms for s in stage_metrics], label="P99")
-    ax1.set_xlabel("Time (s)")
-    ax1.set_ylabel("Latency (ms)")
-    ax1.legend()
-    ax1.set_title("Latency Over Time")
-
-    ax2 = axes[1, 0]
-    ax2.plot(base_url, [s.error_rate * 100 for s in stage_metrics])
-    ax2.set_xlabel("Time (s)")
-    ax2.set_ylabel("Error Rate (%)")
-    ax2.set_title("Error Rate Over Time")
-
-    ax3 = axes[1, 1]
-    ax3.bar(
-        [s.active_users for s in stage_metrics],
-        [s.total_requests for s in stage_metrics],
-    )
-    ax3.set_xlabel("Stage (Active Users)")
-    ax3.set_ylabel("Total Requests")
-    ax3.set_title("Per-Stage Request Count")
-
-    per_model: dict[str, list[RequestMetric]] = {}
-    for m in summary.metrics:
-        per_model.setdefault(m.model, []).append(m)
-
-    ax4 = axes[2, 0]
-    for model_key, model_metrics in per_model.items():
-        if not model_metrics:
-            continue
-        latencies = sorted([
-            mm.latency_ms for mm in model_metrics
-        ])
-        pct50 = latencies[len(latencies) // 2]
-        pct95 = latencies[int(len(latencies) * 0.95)]
-        pct99 = latencies[min(int(len(latencies) * 0.99), len(latencies) - 1)]
-        ax4.plot(
-            [pct50, pct95, pct99],
-            label=f"{model_key} (p50={pct50:.0f}ms)",
-            marker="o",
-        )
-    ax4.set_ylabel("Latency (ms)")
-    ax4.set_title("Latency by Model (P50/P95/P99)")
-    ax4.legend()
-    ax4.set_xticklabels(["P50", "P95", "P99"])
-
-    ax5 = axes[2, 1]
-    for model_key, model_metrics in per_model.items():
-        if not model_metrics:
-            continue
-        success = sum(
-            1 for mm in model_metrics if mm.status == "success"
-        )
-        total = len(model_metrics)
-        ax5.bar(
-            model_key,
-            (success / total) * 100 if total else 0,
-            label=f"{model_key}",
-        )
-    ax5.set_ylabel("Success Rate (%)")
-    ax5.set_title("Per-Model Success Rate")
-    if per_model:
-        ax5.legend()
+    ax.plot(stage_idx, target_rpm, marker="o", color="steelblue", label="Target RPM")
+    ax.plot(stage_idx, achieved_rpm, marker="s", color="crimson", label="Achieved RPM")
+    ax.set_xlabel("Stage Index")
+    ax.set_ylabel("RPM")
+    ax.set_title("Target vs Achieved RPM")
+    ax.grid(True, alpha=0.4)
+    ax.legend()
 
     plt.tight_layout()
     pdf_buf = BytesIO()

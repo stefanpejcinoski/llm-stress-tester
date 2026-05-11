@@ -185,9 +185,10 @@ async def run_test(
             stage_metrics_this = [
                 m for m in summary.metrics if m.stage_index == stage.stage_index
             ]
+            stage_elapsed_s = max(loop.time() - stage_start, 0.001)
             stage_summary = compute_stage_metrics(
                 stage.stage_index,
-                cumulative_prev_s,
+                stage_elapsed_s,
                 stage_metrics_this,
                 target_rps,
                 current_users,
